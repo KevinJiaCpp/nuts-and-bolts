@@ -1,0 +1,11 @@
+extern tc_ClearTerm
+extern tc_ResetFont
+extern tc_MoveCursorAbs
+extern tc_MoveCursorCol
+extern tc_HideCursor
+extern tc_ShowCursor
+extern tc_SetFontFGC
+extern tc_SetFontBGC
+
+extern tc_RawMode
+extern tc_ResetMode
