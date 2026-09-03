@@ -311,10 +311,12 @@ RenderLevel:
 ; R     red
 ; G     green
 ; B     blue
-; O     orange
-; P     purple
+; Y     yellow
+; M     magenta
 ; C     cyan
 ; W     white
+; O     orange
+; L     lime
 ; transfers ownership
 LoadLevel:
 section .data
