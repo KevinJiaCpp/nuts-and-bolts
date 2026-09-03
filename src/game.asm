@@ -1,3 +1,4 @@
+; arg 1 (rdi): level addr
 global Run
 
 ; arg 1 (rdi): file name
@@ -6,8 +7,10 @@ global Run
 global LoadLevel
 
 extern PrintBolt
-
 extern GetBoltAddr
+extern Movable, MoveNuts
+
+extern LevelCleared
 
 %include "src/array.inc"
 %include "src/term.inc"
@@ -19,12 +22,15 @@ extern printf
 extern tolower
 
 section .data
+    ; settings
+    KEY_UP      equ     'd'
+    KEY_DOWN    equ     'f'
+    KEY_LEFT    equ     'j'
+    KEY_RIGHT   equ     'k'
+
     NULL        equ     0
     EOF         equ     -1
     NL          equ     10
-    STDIN       equ     0
-
-    level_path  db      "level.txt", 0
 
     ; ui specs
     BOLT_SPACE  equ     48
@@ -37,18 +43,19 @@ section .data
 			    db		"| |\  | |_| | |_\__ \  / ___ \| | | | (_| | | |_) | (_) | | |_\__ \", 10
 			    db		"|_| \_|\__,_|\__|___/ /_/   \_\_| |_|\__,_| |____/ \___/|_|\__|___/", 10, 0
     ui_sep      db      "═══════════════════════════════════════════════════════════════", 10, 0
+    ui_clear    db      27, "[92m", "LEVEL CLEARED!", 27, "[0m", 10, 0
 
 section .bss
 section .text
 ; ----------------------------------------------------------------
 Run:
     push    rbx
+    push    r12
+    push    r13
+    push    r14
+    sub     rsp, 8
 
-    ; load level
-    ; rbx       holds level addr
-    mov     rdi, level_path
-    call    LoadLevel
-    mov     rbx, rax
+    mov     rbx, rdi
 
     call    tc_ClearTerm
     mov     rdi, 1
@@ -74,21 +81,124 @@ Run:
     mov     rdi, ui_sep
     call    printf
 
+    ; rsp + 0   from indicator
+    ; rsp + 4   to indicator
+    ; r12       active indicator addr
+    mov     r12, rsp
+    mov     dword [rsp + 0], 0
+    mov     dword [rsp + 4], -1
 .mainloop:
-    ; render
+    ; render level
     mov     rdi, LEVEL_POSR
     mov     rsi, 1
     call    tc_MoveCursorAbs
     mov     rdi, rbx
-    mov     rsi, -1
-    mov     rdx, -1
+    mov     esi, [rsp + 0]
+    mov     edx, [rsp + 4]
     call    RenderLevel
+
+    mov     rdi, rbx
+    call    LevelCleared
+    test    rax, rax
+    jz      .not_cleared
+    ; render clear msg and quit
+    mov     rdi, [rbx]
+    add     rdi, LEVEL_POSR + 1
+    mov     rsi, 1
+    call    tc_MoveCursorAbs
+    xor     rax, rax
+    mov     rdi, ui_clear
+    call    printf
+    jmp     .break
+    .not_cleared:
 
     ; handle input
     call    getchar
     cmp     al, 'q'
-    je      .break
+    jne     .handle_input
+    ; exit main loop
+    mov     rdi, [rbx]
+    add     rdi, LEVEL_POSR + 1
+    mov     rsi, 1
+    call    tc_MoveCursorAbs
+    jmp     .break
 
+    .handle_input:
+    cmp     al, KEY_UP
+    je     .up
+    cmp     al, KEY_DOWN
+    je      .down
+    cmp     al, KEY_LEFT
+    je      .left
+    cmp     al, KEY_RIGHT
+    je      .right
+    jmp     .no_event
+
+    .up:
+    dec     dword [r12]
+    mov     eax, [r12]
+    cmp     eax, 0
+    jge     .no_event
+    ; loop over to the lower bound
+    add     eax, [rbx]
+    mov     [r12], eax
+    jmp     .no_event
+
+    .down:
+    inc     dword [r12]
+    mov     eax, [r12]
+    cmp     eax, [rbx]
+    jl      .no_event
+    ; loop over to the upper bound
+    sub     eax, [rbx]
+    mov     [r12], eax
+    jmp     .no_event
+
+    .left:
+    cmp     r12, rsp
+    je      .select
+
+    .move:
+    ; r13       from bolt addr
+    ; r14       to bolt addr
+    mov     rdi, rbx
+    mov     esi, [rsp]
+    call    GetBoltAddr
+    mov     r13, rax
+
+    mov     rdi, rbx
+    mov     esi, [rsp + 4]
+    call    GetBoltAddr
+    mov     r14, rax
+
+    ; ignore self moving
+    cmp     r13, r14
+    je      .right
+
+    mov     rdi, r13
+    mov     rsi, r14
+    call    Movable
+
+    mov     rdi, r13
+    mov     rsi, r14
+    mov     edx, eax
+    call    MoveNuts
+
+    jmp     .right
+
+    .select:
+    lea     r12, [rsp + 4]
+    mov     eax, [rsp]
+    mov     [rsp + 4], eax
+    jmp     .no_event
+
+    .right:
+    mov     eax, [r12]
+    mov     [rsp + 0], eax
+    mov     [rsp + 4], -1
+    mov     r12, rsp
+
+    .no_event:
     jmp     .mainloop
 
 .break:
@@ -108,13 +218,17 @@ Run:
     mov     rdi, rbx
     call    free
 
+    add     rsp, 8
+    pop     r14
+    pop     r13
+    pop     r12
     pop     rbx
     ret
 
 ; ----------------------------------------------------------------
 ; arg 1 (rdi): level addr
-; arg 2 (rsi): left index
-; arg 3 (rdx): right index
+; arg 2 (rsi): from index
+; arg 3 (rdx): to index
 RenderLevel:
     push    rbx
     push    r12
@@ -123,8 +237,8 @@ RenderLevel:
     push    r15
 
     ; rbx   level addr
-    ; r12d   left index
-    ; r13d   right index
+    ; r12d   from index
+    ; r13d   to index
     ; r14d  bolt num
     ; r15d  index
     mov     rbx, rdi
@@ -163,7 +277,14 @@ RenderLevel:
     call    tc_MoveCursorCol
 
     cmp     r15d, r13d
-    jne      .continue
+    je      .right
+    mov     dil, ' '
+    call    putchar
+    mov     dil, ' '
+    call    putchar
+    jmp     .continue
+
+    .right:
     ; print right indicator
     mov     dil, ' '
     call    putchar
@@ -199,14 +320,17 @@ LoadLevel:
 section .data
     .mode       db          "r", 0
 
-    .C_EMPTY     db          0, 0, 0, 0
-    .C_RED       db          255, 0, 0, 0
-    .C_GREEN     db          0, 255, 0, 0
-    .C_BLUE      db          0, 0, 255, 0
-    .C_ORANGE    db          255, 255, 0 ,0.
-    .C_PURPLE    db          255, 0, 255, 0
-    .C_CYAN      db          0, 255, 255, 0
-    .C_WHITE     db          255, 255, 255, 0
+    .C_EMPTY    db          0, 0, 0, 0
+    .C_RED      db          255, 0, 0, 0
+    .C_GREEN    db          0, 255, 0, 0
+    .C_BLUE     db          0, 0, 255, 0
+    .C_YELLOW   db          255, 255, 0 ,0.
+    .C_MAGENTA  db          255, 0, 255, 0
+    .C_CYAN     db          0, 255, 255, 0
+    .C_WHITE    db          255, 255, 255, 0
+
+    .C_ORANGE   db          255, 85, 0, 0
+    .C_LIME     db          178, 255, 102, 0
 
 section .text
     push    rbp
@@ -264,14 +388,18 @@ section .text
     je      .green
     cmp     al, 'b'
     je      .blue
-    cmp     al, 'o'
-    je      .orange
-    cmp     al, 'p'
-    je      .purple
+    cmp     al, 'y'
+    je      .yellow
+    cmp     al, 'm'
+    je      .magenta
     cmp     al, 'c'
     je      .cyan
     cmp     al, 'w'
     je      .white
+    cmp     al, 'o'
+    je      .orange
+    cmp     al, 'l'
+    je      .lime
     jmp     .read
     .red:
         mov     r13, .C_RED
@@ -282,11 +410,11 @@ section .text
     .blue:
         mov     r13, .C_BLUE
         jmp     .addnut
-    .orange:
-        mov     r13, .C_ORANGE
+    .yellow:
+        mov     r13, .C_YELLOW
         jmp     .addnut
-    .purple:
-        mov     r13, .C_PURPLE
+    .magenta:
+        mov     r13, .C_MAGENTA
         jmp     .addnut
     .cyan:
         mov     r13, .C_CYAN
@@ -294,7 +422,13 @@ section .text
     .white:
         mov     r13, .C_WHITE
         jmp     .addnut
-    .empty:
+    .orange:
+        mov     r13, .C_ORANGE
+        jmp     .addnut
+    .lime:
+        mov     r13, .C_LIME
+        jmp     .addnut
+    .empty: 
         mov     r13, .C_EMPTY
         jmp     .addnut
 

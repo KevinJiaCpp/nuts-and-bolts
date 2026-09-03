@@ -15,15 +15,16 @@ global BoltEmpty
 ; returns the top nut of the bolt
 global BoltTop
 
-; arg 1 (rdi) : src bolt addr
-; arg 2 (rsi) : dest bolt addr
+; arg 1 (rdi) : from bolt addr
+; arg 2 (rsi) : to bolt addr
 ; returns the number of movable nuts
 global Movable
 
-; arg 1 (rdi) : src bolt addr
-; arg 2 (rsi) : dest bolt addr
+; arg 1 (rdi) : from bolt addr
+; arg 2 (rsi) : to bolt addr
 ; arg 3 (rdx) : number of nuts to move
 ; no return value
+; no self moving
 global MoveNuts
 
 ; arg 1 (rdi) : bolt addr
